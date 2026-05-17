@@ -1,4 +1,4 @@
-# Plannotator — Phase 2: Self-Hosted Agentic Architecture
+# Plannotator — Phases 2 & 3: Self-Hosted Agentic Architecture
 
 > **Status:** Architecture approved, pending implementation.  
 > **Branch:** `copilot/research-unified-infra-architecture`  
@@ -8,30 +8,51 @@
 
 ## Table of Contents
 
+### Phase 2 — Cloud-Native Backend
+
 1. [Overview & Goals](#1-overview--goals)
 2. [Technology Stack](#2-technology-stack)
 3. [Pillar 1 — Self-Correcting Standards Engine & Learning Loop](#3-pillar-1--self-correcting-standards-engine--learning-loop)
 4. [Pillar 2 — Hub-and-Spoke Multi-Agent Mesh](#4-pillar-2--hub-and-spoke-multi-agent-mesh)
 5. [Pillar 3 — Real-Time Backlog Service & WebSocket Pub/Sub](#5-pillar-3--real-time-backlog-service--websocket-pubsub)
-6. [Database & Schema Design](#6-database--schema-design)
-7. [wrangler.jsonc Configuration](#7-wranglerjsonc-configuration)
+6. [Database & Schema Design (Phase 2)](#6-database--schema-design)
+7. [wrangler.jsonc Configuration (Phase 2 base)](#7-wranglerjsonc-configuration)
 8. [New Application Entry Point](#8-new-application-entry-point)
 9. [Consistency & Reliability Guarantees](#9-consistency--reliability-guarantees)
-10. [File-System Layout for New Code](#10-file-system-layout-for-new-code)
+10. [File-System Layout (Phase 2)](#10-file-system-layout-for-new-code)
+
+### Phase 3 — Pattern Ingestion, Schema Discipline, AI Abstractions & Lifecycle Artifacts
+
+11. [Phase 3 Overview](#11-phase-3-overview)
+12. [Pillar 4 — Private Pattern Ingestion & Template Injection](#12-pillar-4--private-pattern-ingestion--template-injection)
+13. [Pillar 5 — Deep Schema Modularization & Auto-Generated CRUD](#13-pillar-5--deep-schema-modularization--auto-generated-crud)
+14. [Pillar 6 — Unified AI Abstractions & Agent Runtime Boundaries](#14-pillar-6--unified-ai-abstractions--agent-runtime-boundaries)
+15. [Pillar 7 — Lifecycle Instruction & Stored-Plan Continuity](#15-pillar-7--lifecycle-instruction--stored-plan-continuity)
+16. [wrangler.jsonc Additions (Phase 3)](#16-wranglerjsonc-additions-phase-3)
+17. [File-System Layout (Phase 3 additions)](#17-file-system-layout-phase-3-additions)
 
 ---
 
 ## 1. Overview & Goals
 
-Phase 2 evolves Plannotator from a local Bun-based review server into a fully self-hosted, agentic review platform deployed on Cloudflare Workers. The existing annotation UI (`packages/ui`), plan parser, and hook plugin remain unchanged. Phase 2 wraps them with a cloud-native backend.
+Phase 2 evolves Plannotator from a local Bun-based review server into a fully self-hosted, agentic review platform deployed on Cloudflare Workers. The existing annotation UI (`packages/ui`), plan parser, and hook plugin remain unchanged. Phase 2 wraps them with a cloud-native backend. Phase 3 (see §11–17) layers on pattern ingestion, schema discipline, unified AI abstractions, and lifecycle artifact generation.
 
-**Three core deliverables:**
+**Phase 2 — Three core deliverables:**
 
 | # | Pillar | Primary Cloudflare Primitives |
 |---|--------|-------------------------------|
 | 1 | Self-Correcting Standards Engine | Agents SDK, Vectorize, D1, Workers AI, Queues |
 | 2 | Hub-and-Spoke Multi-Agent Mesh | `this.subAgent()`, `this.addMcpServer()`, Durable Objects |
 | 3 | Real-Time Backlog Pub/Sub | WebSocket Hibernation API, `this.broadcast()`, `waitUntil`, D1 |
+
+**Phase 3 — Four additional pillars:**
+
+| # | Pillar | Scope |
+|---|--------|-------|
+| 4 | Private Pattern Ingestion & Template Injection | `core-github-standardization` repo scan, baton-passing annotations, specialist tailoring |
+| 5 | Deep Schema Modularization & Auto-CRUD | Per-table isolated files, `drizzle-zod` admin surface, journey-driven endpoints |
+| 6 | Unified AI Abstractions & Agent Base Classes | `ModelProvider` control plane, `BackgroundOperationAgent`, `FrontendInteractiveAgent` |
+| 7 | Lifecycle Instruction & Stored-Plan Continuity | Auto-generated `AGENTS.md`, `.agent/rules/`, D1-backed anti-vacuum continuity |
 
 ---
 
@@ -818,4 +839,945 @@ plannotator/
 
 ---
 
-*End of Implementation Plan — Phase 2*
+*End of Phase 2 content — Phase 3 sections follow below.*
+
+---
+
+## 11. Phase 3 Overview
+
+Phase 3 does not introduce new Cloudflare infrastructure — it **disciplines** how Phase 2 infrastructure is used and adds four cross-cutting capabilities that are pre-requisites for long-running multi-agent sprints.
+
+| Concern | Problem Solved |
+|---------|----------------|
+| Pattern Ingestion (§12) | Agents reinvent proven wheels every sprint; template injection + specialist tailoring eliminates redundant scratch-generation |
+| Schema Modularization (§13) | Monolithic schema files → merge conflicts, opaque ownership; per-table isolation + drizzle-zod admin surface eliminates manual CRUD maintenance |
+| AI Abstractions (§14) | Each agent wires inference differently → untestable, fragmented fallback logic; `ModelProvider` + base classes standardize all LLM calls |
+| Lifecycle Artifacts (§15) | Agents run without persistent context across sprints → drift and regression; D1 ledger + auto-generated rule files ensure continuity |
+
+**Guiding constraint:** Phase 3 code lives exclusively under:
+
+- `apps/worker/src/backend/` — all new server-side modules
+- `.agent/rules/` — generated IDE orchestration rules (committed output artifact)
+
+No existing Phase 2 agent files are rewritten; they are extended via inheritance or composition.
+
+---
+
+## 12. Pillar 4 — Private Pattern Ingestion & Template Injection
+
+### 12.1 Pattern Repository Contract
+
+The `core-github-standardization` repository contains battle-tested engineering primitives organized by pattern type:
+
+```
+core-github-standardization/
+├── patterns/
+│   ├── full-stack-astro-worker/    ← Astro + Cloudflare Worker routing
+│   ├── d1-drizzle-setup/           ← D1 + Drizzle ORM boilerplate
+│   ├── realtime-agent-ws/          ← Agent WebSocket + hibernation
+│   ├── ai-gateway-fallback/        ← Multi-provider AI Gateway config
+│   └── hono-typed-router/          ← Hono + Zod end-to-end typed router
+└── manifest.json                   ← Pattern index with tags + paths
+```
+
+The `manifest.json` schema (fetched at runtime by the agent):
+
+```typescript
+interface PatternManifest {
+  version: string;
+  patterns: PatternEntry[];
+}
+
+interface PatternEntry {
+  id: string;                  // e.g. "d1-drizzle-setup"
+  name: string;
+  description: string;
+  tags: string[];              // e.g. ["database", "drizzle", "d1", "migration"]
+  entryPath: string;           // e.g. "patterns/d1-drizzle-setup/"
+  files: string[];             // Relative file list in pattern directory
+  parameterSchema: Record<string, string>; // { PROJECT_NAME, TABLE_PREFIX, ... }
+  injectCommand: string;       // Parameterized shell command template
+}
+```
+
+### 12.2 PatternIngestionMcp Agent
+
+A new `McpAgent` class that wraps read access to the private `core-github-standardization` repository:
+
+```typescript
+// apps/worker/src/backend/agents/PatternIngestionMcp.ts
+import { McpAgent } from 'agents/mcp';
+import type { Env } from '../../index';
+
+export class PatternIngestionMcp extends McpAgent<Env, {}> {
+  async init() {
+    // Register tools exposed to OrchestratorAgent
+    this.server.tool('list_patterns', { description: 'List all available patterns from the standardization repo' },
+      async () => {
+        const manifest = await this.fetchManifest();
+        return { content: [{ type: 'text', text: JSON.stringify(manifest.patterns) }] };
+      }
+    );
+
+    this.server.tool('get_pattern_files', {
+        description: 'Fetch the file contents of a specific pattern block',
+        inputSchema: { type: 'object', properties: { patternId: { type: 'string' } }, required: ['patternId'] }
+      },
+      async ({ patternId }) => {
+        const files = await this.fetchPatternFiles(patternId);
+        return { content: [{ type: 'text', text: JSON.stringify(files) }] };
+      }
+    );
+
+    this.server.tool('build_inject_command', {
+        description: 'Generate the parameterized inject command for a pattern with project-specific values',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            patternId:  { type: 'string' },
+            parameters: { type: 'object' }
+          },
+          required: ['patternId', 'parameters']
+        }
+      },
+      async ({ patternId, parameters }) => {
+        const cmd = await this.buildCommand(patternId, parameters);
+        return { content: [{ type: 'text', text: cmd }] };
+      }
+    );
+  }
+
+  private async fetchManifest(): Promise<PatternManifest> {
+    const token = this.env.STANDARDIZATION_REPO_TOKEN;
+    const res = await fetch(
+      'https://raw.githubusercontent.com/OWNER/core-github-standardization/main/manifest.json',
+      { headers: { Authorization: `token ${token}` } }
+    );
+    return res.json();
+  }
+
+  // fetchPatternFiles() and buildCommand() omitted for brevity
+}
+```
+
+### 12.3 OrchestratorAgent — Template Annotation Pass
+
+After its standard review pass (§4), the `OrchestratorAgent` runs an additional **template-mapping pass**:
+
+```
+conductReview(plan)
+        │
+        ├─ [existing] Parallel UX + Platform specialist analysis
+        │
+        └─ [NEW] Template Mapping Pass:
+               ┌─────────────────────────────────────────────────────┐
+               │  1. Call this.mcp['pattern-ingestion'].list_patterns │
+               │  2. LLM prompt:                                      │
+               │       "Given this plan and available patterns,       │
+               │        identify sections that could be replaced by   │
+               │        a standardized template injection rather      │
+               │        than scratch-generation.                      │
+               │        Output TemplateAnnotation[] JSON."            │
+               │  3. Zod-validate TemplateAnnotation[]                │
+               │  4. For each matched annotation:                     │
+               │       • Call build_inject_command(patternId, params) │
+               │       • Attach injectCommand to annotation           │
+               │  5. Store template_annotations in D1                 │
+               │  6. Broadcast { type:'template_annotations', ... }   │
+               └─────────────────────────────────────────────────────┘
+```
+
+**`TemplateAnnotation` type** (`packages/shared/src/patterns.ts`):
+
+```typescript
+interface TemplateAnnotation {
+  planSectionRef: string;         // Heading or block ID in plan
+  patternId: string;              // Matched pattern from manifest
+  patternName: string;
+  matchConfidence: number;        // 0.0 – 1.0
+  parameters: Record<string, string>; // Project-specific fill values
+  injectCommand: string;          // Executable command to pull template
+  rationale: string;              // Why this pattern maps to this section
+}
+
+type TemplateAnnotatedPlan = {
+  originalPlan: string;
+  annotations: TemplateAnnotation[];
+  unreplacedSections: string[];   // Sections with no matching pattern → scratch-generate
+}
+```
+
+### 12.4 Specialist Tailoring Pass
+
+When a specialist agent receives a `TemplateAnnotation` alongside the plan section it covers, it **does not** validate scratch-built code. Instead it performs a surgical tailoring analysis:
+
+```
+UXSpecialistAgent.analyze(plan, streamCollector, templateAnnotations?)
+        │
+        ├─ [standard] Astro / Shadcn violation scan (unchanged)
+        │
+        └─ [NEW] For each templateAnnotation in section:
+               ┌──────────────────────────────────────────────────────────┐
+               │  1. Fetch pattern file contents via get_pattern_files     │
+               │  2. LLM prompt:                                          │
+               │       "Given this standard template and the project's    │
+               │        domain spec, generate a TailoringGroup — a        │
+               │        precise list of line-level edits to bind the      │
+               │        shared pattern to this project's requirements."   │
+               │  3. Output TailoringGroup[] (Zod-validated)             │
+               │  4. Attach TailoringGroup to TemplateAnnotation          │
+               └──────────────────────────────────────────────────────────┘
+```
+
+**`TailoringGroup` type** (`packages/shared/src/patterns.ts`):
+
+```typescript
+interface TailoringInstruction {
+  filePath: string;              // Relative path within injected pattern
+  lineNumber?: number;
+  searchPattern: string;         // Exact string or regex to locate the line
+  replacement: string;           // Project-specific replacement value
+  reason: string;
+}
+
+interface TailoringGroup {
+  patternId: string;
+  projectId: string;
+  instructions: TailoringInstruction[];
+  appliedBy: 'ux' | 'platform';
+  generatedAt: number;
+}
+```
+
+### 12.5 New D1 Tables for Pattern Phase
+
+```typescript
+// src/backend/db/schemas/patterns/template_annotations.ts
+export const templateAnnotations = sqliteTable('template_annotations', {
+  id:               text('id').primaryKey(),
+  reviewSessionId:  text('review_session_id').notNull().references(() => reviewSessions.id),
+  planSectionRef:   text('plan_section_ref').notNull(),
+  patternId:        text('pattern_id').notNull(),
+  matchConfidence:  real('match_confidence').notNull(),
+  parameters:       text('parameters').notNull(),  // JSON
+  injectCommand:    text('inject_command').notNull(),
+  rationale:        text('rationale'),
+  tailoringGroup:   text('tailoring_group'),        // JSON TailoringGroup, set after specialist pass
+  createdAt:        integer('created_at', { mode: 'timestamp' }).notNull(),
+});
+```
+
+---
+
+## 13. Pillar 5 — Deep Schema Modularization & Auto-Generated CRUD
+
+### 13.1 Canonical Schema Directory Layout
+
+All Drizzle table files (Phase 2 and Phase 3) are reorganized into strictly isolated per-table files:
+
+```
+apps/worker/src/backend/db/schemas/
+├── index.ts                             ← re-exports all tables
+├── configurations/
+│   ├── projects.ts
+│   └── rules.ts
+├── plans/
+│   ├── plans.ts
+│   ├── plan_versions.ts
+│   └── template_annotations.ts
+├── annotations/
+│   └── annotations.ts
+├── backlog/
+│   ├── epics.ts
+│   ├── sprints.ts
+│   ├── tasks.ts
+│   └── task_assignments.ts
+├── review/
+│   ├── review_sessions.ts
+│   └── specialist_reports.ts
+├── signals/
+│   └── learned_preferences.ts
+└── lifecycle/
+    ├── sprint_contexts.ts               ← NEW (Phase 3)
+    └── agent_rule_snapshots.ts          ← NEW (Phase 3)
+```
+
+**Rules:**
+- One Drizzle table = one `.ts` file. No exceptions.
+- File name = snake_case table name.
+- Imports reference sibling schemas by relative path only (no barrel re-imports inside schema files).
+- `index.ts` is the only file allowed to re-export; no other file imports from `index.ts`.
+
+### 13.2 drizzle-zod Auto-Admin CRUD Layer
+
+Every table defined in `schemas/` automatically gets a full CRUD admin surface with zero manual route authoring:
+
+```typescript
+// apps/worker/src/backend/routes/admin.ts
+import { Hono } from 'hono';
+import { drizzle } from 'drizzle-orm/d1';
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+import { zValidator } from '@hono/zod-validator';
+import * as schema from '../db/schemas/index';
+import { requireAdminBearer } from '../lib/auth';
+import type { Env } from '../../index';
+
+const admin = new Hono<{ Bindings: Env }>();
+admin.use('*', requireAdminBearer);
+
+// Dynamically register CRUD for each exported table
+for (const [tableName, table] of Object.entries(schema)) {
+  if (typeof table !== 'object' || !('$inferSelect' in table)) continue;
+
+  const insertSchema = createInsertSchema(table);
+  const selectSchema = createSelectSchema(table);
+
+  // GET /api/admin/tables/:tableName
+  admin.get(`/tables/${tableName}`, async (c) => {
+    const db = drizzle(c.env.DB, { schema });
+    const rows = await db.select().from(table as any);
+    return c.json(rows);
+  });
+
+  // GET /api/admin/tables/:tableName/:id
+  admin.get(`/tables/${tableName}/:id`, async (c) => {
+    const db = drizzle(c.env.DB, { schema });
+    const rows = await db.select().from(table as any)
+      .where((t: any) => eq(t.id, c.req.param('id')));
+    return rows.length ? c.json(rows[0]) : c.json({ error: 'Not found' }, 404);
+  });
+
+  // POST /api/admin/tables/:tableName
+  admin.post(`/tables/${tableName}`, zValidator('json', insertSchema), async (c) => {
+    const db = drizzle(c.env.DB, { schema });
+    const body = c.req.valid('json');
+    const result = await db.insert(table as any).values(body).returning();
+    return c.json(result[0], 201);
+  });
+
+  // PATCH /api/admin/tables/:tableName/:id
+  admin.patch(`/tables/${tableName}/:id`, zValidator('json', insertSchema.partial()), async (c) => {
+    const db = drizzle(c.env.DB, { schema });
+    const body = c.req.valid('json');
+    const result = await db.update(table as any).set(body)
+      .where((t: any) => eq(t.id, c.req.param('id'))).returning();
+    return result.length ? c.json(result[0]) : c.json({ error: 'Not found' }, 404);
+  });
+
+  // DELETE /api/admin/tables/:tableName/:id
+  admin.delete(`/tables/${tableName}/:id`, async (c) => {
+    const db = drizzle(c.env.DB, { schema });
+    await db.delete(table as any).where((t: any) => eq(t.id, c.req.param('id')));
+    return c.json({ deleted: true });
+  });
+}
+
+export { admin };
+```
+
+**Schema-change resilience:** When a new table is added to `schemas/`, the loop automatically exposes its full CRUD surface on the next deploy — no route changes needed.
+
+### 13.3 Journey-Driven API Boundaries
+
+The admin layer handles **maintenance operations**. **Product journeys** live in dedicated route files with hand-authored, multi-table Drizzle queries and domain-specific Zod schemas:
+
+| Journey | Route Prefix | What It Does |
+|---------|-------------|--------------|
+| Plan submission + backlog trigger | `POST /api/plans/submit` | Inserts plan, enqueues decomposition, returns backlog stub |
+| Template injection execution log | `POST /api/patterns/inject` | Records injection command execution + outcome |
+| Sprint context snapshot | `POST /api/sprints/snapshot` | Captures current sprint rules + completed task IDs into `sprint_contexts` |
+| Agent rule compilation | `POST /api/lifecycle/compile-rules` | Triggers `LifecycleArtifactAgent.compileArtifacts()` via DO RPC |
+
+Each journey route has its own Zod schema, does **not** reuse the drizzle-zod generated schemas, and may span multiple D1 tables in a single transaction.
+
+### 13.4 New Phase 3 Schema Tables
+
+#### `lifecycle/sprint_contexts.ts`
+
+```typescript
+export const sprintContexts = sqliteTable('sprint_contexts', {
+  id:                  text('id').primaryKey(),
+  projectId:           text('project_id').notNull().references(() => projects.id),
+  sprintId:            text('sprint_id').references(() => sprints.id),
+  planVersionId:       text('plan_version_id').notNull(),
+  completedTaskIds:    text('completed_task_ids').notNull(),   // JSON string[]
+  activeRuleSnapshot:  text('active_rule_snapshot').notNull(), // JSON ApprovedRule[]
+  templateInjections:  text('template_injections').notNull(),  // JSON TemplateAnnotation[]
+  agentsMdHash:        text('agents_md_hash'),                 // SHA-256 of emitted AGENTS.md
+  createdAt:           integer('created_at', { mode: 'timestamp' }).notNull(),
+});
+```
+
+#### `lifecycle/agent_rule_snapshots.ts`
+
+```typescript
+export const agentRuleSnapshots = sqliteTable('agent_rule_snapshots', {
+  id:           text('id').primaryKey(),
+  projectId:    text('project_id').notNull().references(() => projects.id),
+  ruleContent:  text('rule_content').notNull(),  // Full .agent/rules/*.md content
+  ruleFileName: text('rule_file_name').notNull(),
+  trigger:      text('trigger', {
+                  enum: ['sprint_complete','manual','plan_approved']
+                }).notNull(),
+  createdAt:    integer('created_at', { mode: 'timestamp' }).notNull(),
+});
+```
+
+---
+
+## 14. Pillar 6 — Unified AI Abstractions & Agent Runtime Boundaries
+
+### 14.1 ModelProvider — Central Inference Control Plane
+
+All LLM calls in the codebase route through a single class. No agent, route, or service calls `env.AI.run()` directly.
+
+```typescript
+// apps/worker/src/backend/ai/providers/model-provider.ts
+import type { Env } from '../../index';
+
+type Provider = 'workers-ai' | 'openai' | 'anthropic' | 'gemini';
+
+interface GenerateTextOptions {
+  prompt: string;
+  systemPrompt?: string;
+  provider?: Provider;
+  model?: string;
+  maxTokens?: number;
+}
+
+interface GenerateStructuredOptions<T> extends GenerateTextOptions {
+  schema: import('zod').ZodType<T>;
+  retries?: number;             // Default: 2
+}
+
+interface GenerateVisionOptions {
+  prompt: string;
+  imageUrl: string;
+  provider?: Provider;
+  model?: string;
+}
+
+export class ModelProvider {
+  constructor(private env: Env) {}
+
+  // Default: workers-ai @cf/meta/llama-3.1-8b-instruct → openai gpt-4o fallback
+  async generateText(opts: GenerateTextOptions): Promise<string> {
+    const provider = opts.provider ?? 'workers-ai';
+    const gatewayUrl = `https://gateway.ai.cloudflare.com/v1/${this.env.CF_ACCOUNT_ID}/${this.env.AI_GATEWAY_ID}`;
+
+    if (provider === 'workers-ai') {
+      const result = await this.env.AI.run(
+        (opts.model ?? '@cf/meta/llama-3.1-8b-instruct') as any,
+        { messages: this.buildMessages(opts) }
+      );
+      return (result as any).response ?? '';
+    }
+
+    // External providers via AI Gateway proxy
+    const res = await fetch(`${gatewayUrl}/${provider}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.resolveToken(provider)}`,
+      },
+      body: JSON.stringify({
+        model: opts.model ?? this.defaultModelFor(provider),
+        messages: this.buildMessages(opts),
+        max_tokens: opts.maxTokens ?? 2048,
+      }),
+    });
+    const data = await res.json() as any;
+    return data.choices?.[0]?.message?.content ?? '';
+  }
+
+  // Default: gemini gemini-2.0-flash — strict JSON schema adherence
+  async generateStructured<T>(opts: GenerateStructuredOptions<T>): Promise<T> {
+    const provider = opts.provider ?? 'gemini';
+    const model    = opts.model    ?? 'gemini-2.0-flash';
+    const zodToJsonSchema = (await import('zod-to-json-schema')).zodToJsonSchema;
+    const jsonSchema = zodToJsonSchema(opts.schema);
+
+    const systemPrompt = `${opts.systemPrompt ?? ''}\n\nYou MUST respond with valid JSON matching this schema:\n${JSON.stringify(jsonSchema, null, 2)}\n\nDo not include markdown fences or any other text.`;
+    const raw = await this.generateText({ ...opts, provider, model, systemPrompt });
+
+    const parsed = opts.schema.safeParse(JSON.parse(raw));
+    if (parsed.success) return parsed.data;
+
+    // Retry loop (up to opts.retries)
+    const retries = opts.retries ?? 2;
+    for (let i = 0; i < retries; i++) {
+      const retry = await this.generateText({ ...opts, provider, model, systemPrompt: `${systemPrompt}\n\nPrevious attempt had validation errors. Try again.` });
+      const p2 = opts.schema.safeParse(JSON.parse(retry));
+      if (p2.success) return p2.data;
+    }
+    throw new Error(`generateStructured: failed after ${retries} retries`);
+  }
+
+  // Default: workers-ai @cf/llava-1.5-7b-hf
+  async generateVision(opts: GenerateVisionOptions): Promise<string> {
+    const provider = opts.provider ?? 'workers-ai';
+    if (provider === 'workers-ai') {
+      const result = await this.env.AI.run('@cf/llava-1.5-7b-hf' as any, {
+        prompt: opts.prompt,
+        image: opts.imageUrl,
+      });
+      return (result as any).description ?? '';
+    }
+    return this.generateText({ prompt: `[IMAGE: ${opts.imageUrl}]\n${opts.prompt}`, provider });
+  }
+
+  private buildMessages(opts: GenerateTextOptions) {
+    const messages: { role: string; content: string }[] = [];
+    if (opts.systemPrompt) messages.push({ role: 'system', content: opts.systemPrompt });
+    messages.push({ role: 'user', content: opts.prompt });
+    return messages;
+  }
+
+  private defaultModelFor(provider: Provider): string {
+    return {
+      'openai': 'gpt-4o',
+      'anthropic': 'claude-3-5-sonnet-20241022',
+      'gemini': 'gemini-2.0-flash',
+      'workers-ai': '@cf/meta/llama-3.1-8b-instruct',
+    }[provider];
+  }
+
+  private resolveToken(provider: Provider): string {
+    return {
+      'openai': this.env.OPENAI_API_KEY,
+      'anthropic': this.env.ANTHROPIC_API_KEY,
+      'gemini': this.env.GEMINI_API_KEY,
+      'workers-ai': '',
+    }[provider] ?? '';
+  }
+}
+```
+
+**Usage inside any agent or route:**
+
+```typescript
+const ai = new ModelProvider(this.env);
+const text = await ai.generateText({ prompt: 'Hello' });
+const data = await ai.generateStructured({ prompt: '...', schema: MyZodSchema });
+```
+
+### 14.2 BackgroundOperationAgent — Base Class
+
+```typescript
+// apps/worker/src/backend/ai/agents/BackgroundOperationAgent.ts
+import { Agent } from 'agents';
+import { getAgentByName } from 'agents';
+import { ModelProvider } from '../providers/model-provider';
+import type { Env } from '../../index';
+
+export interface BackgroundState {
+  jobId: string;
+  status: 'idle' | 'running' | 'complete' | 'error';
+  startedAt?: number;
+  completedAt?: number;
+  error?: string;
+}
+
+/**
+ * Base class for all async, non-interactive background agents.
+ * Extend this for pipeline steps, queue consumers, decomposition agents, etc.
+ *
+ * IMPORTANT: Always instantiate agents using getAgentByName() — never use raw
+ * Durable Object primitives (idFromName + .get()).
+ *
+ * Example:
+ *   const agent = await getAgentByName<MyAgent>(env.MY_AGENT_NAMESPACE, 'job-123');
+ *   await agent.run(payload);
+ */
+export abstract class BackgroundOperationAgent<E extends Env = Env, S extends BackgroundState = BackgroundState>
+  extends Agent<E, S> {
+
+  protected ai!: ModelProvider;
+
+  override initialState: S = {
+    jobId: '',
+    status: 'idle',
+  } as S;
+
+  override async onStart(): Promise<void> {
+    this.ai = new ModelProvider(this.env);
+    await this.onAgentStart();
+  }
+
+  /** Override in subclasses to add initialization logic. */
+  protected async onAgentStart(): Promise<void> {}
+
+  /** Override to implement the actual background operation. */
+  abstract run(payload: unknown): Promise<void>;
+
+  protected async setRunning(jobId: string): Promise<void> {
+    await this.setState({ ...this.state, jobId, status: 'running', startedAt: Date.now() });
+  }
+
+  protected async setComplete(): Promise<void> {
+    await this.setState({ ...this.state, status: 'complete', completedAt: Date.now() });
+  }
+
+  protected async setError(error: string): Promise<void> {
+    await this.setState({ ...this.state, status: 'error', error, completedAt: Date.now() });
+  }
+}
+```
+
+### 14.3 FrontendInteractiveAgent — Base Class
+
+```typescript
+// apps/worker/src/backend/ai/agents/FrontendInteractiveAgent.ts
+import { AIChatAgent } from 'agents/ai-chat-agent';
+import { getAgentByName } from 'agents';
+import { ModelProvider } from '../providers/model-provider';
+import type { Env } from '../../index';
+
+export interface InteractiveState {
+  userId: string;
+  sessionId: string;
+  connectedAt: number;
+  systemPrompt: string;
+  messageHistory: { role: 'user' | 'assistant'; content: string }[];
+}
+
+/**
+ * Base class for all real-time, user-facing agents that stream responses
+ * over WebSockets and integrate with assistant-ui.
+ *
+ * IMPORTANT: Always instantiate using getAgentByName() — never use raw DO primitives.
+ *
+ * Example:
+ *   const agent = await getAgentByName<ReviewChatAgent>(env.REVIEW_CHAT, sessionId);
+ *   // Then route WebSocket upgrade to its DO stub
+ */
+export abstract class FrontendInteractiveAgent<E extends Env = Env, S extends InteractiveState = InteractiveState>
+  extends AIChatAgent<E, S> {
+
+  protected ai!: ModelProvider;
+
+  override initialState: S = {
+    userId: '',
+    sessionId: '',
+    connectedAt: 0,
+    systemPrompt: '',
+    messageHistory: [],
+  } as S;
+
+  override async onStart(): Promise<void> {
+    this.ai = new ModelProvider(this.env);
+    await this.onAgentStart();
+  }
+
+  /** Override in subclasses to add initialization logic (e.g., load rules). */
+  protected async onAgentStart(): Promise<void> {}
+
+  override async onConnect(connection: any, ctx: any): Promise<void> {
+    const url  = new URL(ctx.request.url);
+    const userId    = url.searchParams.get('userId')    ?? 'anonymous';
+    const sessionId = url.searchParams.get('sessionId') ?? this.name;
+    connection.setState({ userId, sessionId, connectedAt: Date.now() });
+    await this.onClientConnect(connection, ctx);
+  }
+
+  /** Override to implement connection setup (e.g., send initial snapshot). */
+  protected async onClientConnect(_connection: any, _ctx: any): Promise<void> {}
+
+  /** Override to handle streaming tool calls in subclasses. */
+  protected async executeTools(_toolName: string, _args: unknown): Promise<unknown> {
+    throw new Error(`Tool ${_toolName} not implemented`);
+  }
+}
+```
+
+### 14.4 Factory Usage Pattern
+
+**Always use `getAgentByName()` — never use raw Durable Object stubs:**
+
+```typescript
+import { getAgentByName } from 'agents';
+import { OrchestratorAgent } from './agents/OrchestratorAgent';
+
+// ✅ Correct — SDK factory pattern
+const orchestrator = await getAgentByName<OrchestratorAgent>(
+  env.ORCHESTRATOR_AGENT,
+  `session-${planVersionId}`
+);
+await orchestrator.startReview(planVersionId);
+
+// ❌ Wrong — raw DO primitives
+const id   = env.ORCHESTRATOR_AGENT.idFromName(`session-${planVersionId}`);
+const stub = env.ORCHESTRATOR_AGENT.get(id);
+await stub.startReview(planVersionId); // No type safety, no SDK lifecycle
+```
+
+### 14.5 Refactoring Existing Agents
+
+All agents created in Phase 2 are updated (not rewritten) to extend the appropriate base class:
+
+| Agent | Previous Base | Phase 3 Base |
+|-------|--------------|--------------|
+| `StandardsAgent` | `Agent` | `BackgroundOperationAgent` |
+| `OrchestratorAgent` | `Agent` | `BackgroundOperationAgent` |
+| `UXSpecialistAgent` | `Agent` | `BackgroundOperationAgent` |
+| `PlatformSpecialistAgent` | `Agent` | `BackgroundOperationAgent` |
+| `BacklogAgent` | `Agent` | `FrontendInteractiveAgent` |
+| `LifecycleArtifactAgent` | *(new)* | `BackgroundOperationAgent` |
+| `PatternIngestionMcp` | `McpAgent` | `McpAgent` *(unchanged)* |
+
+---
+
+## 15. Pillar 7 — Lifecycle Instruction & Stored-Plan Continuity
+
+### 15.1 LifecycleArtifactAgent
+
+A new background agent triggered at sprint boundaries. Its sole responsibility is compiling all available context into durable, committed text files that the next coding agent session picks up automatically.
+
+```typescript
+// apps/worker/src/backend/agents/LifecycleArtifactAgent.ts
+export class LifecycleArtifactAgent extends BackgroundOperationAgent {
+
+  async run(payload: LifecycleCompilePayload): Promise<void> {
+    await this.setRunning(payload.projectId);
+
+    // 1. Pull plan ledger from D1
+    const ledger = await this.loadPlanLedger(payload.projectId);
+
+    // 2. Pull active rules snapshot
+    const rules = await this.loadActiveRules(payload.projectId);
+
+    // 3. Pull template injections from this sprint
+    const injections = await this.loadTemplateAnnotations(payload.reviewSessionId);
+
+    // 4. Generate AGENTS.md via structured LLM call
+    const agentsMd = await this.generateAgentsMd({ ledger, rules, injections, payload });
+
+    // 5. Generate per-pillar rule files for .agent/rules/
+    const ruleFiles = await this.generateRuleFiles({ ledger, rules, payload });
+
+    // 6. Write outputs to R2 (KV would work too; R2 for file-like output)
+    await this.persistArtifacts(payload.projectId, agentsMd, ruleFiles);
+
+    // 7. Store snapshot in D1 for anti-vacuum continuity
+    await this.storeRuleSnapshots(payload.projectId, ruleFiles, payload);
+
+    await this.setComplete();
+  }
+  // ... (generateAgentsMd, generateRuleFiles, persistArtifacts, storeRuleSnapshots)
+}
+```
+
+### 15.2 AGENTS.md Generation Template
+
+The generated `AGENTS.md` is always project-specific — it is not a static template. It is produced by an LLM call with the following context:
+
+```
+System: You are a technical writer generating an AGENTS.md for a coding agent.
+        This file tells the agent exactly what infrastructure, rules, and
+        conventions apply to this project. Be precise and concrete.
+
+User:   Project: {projectName}
+        Platform: Cloudflare Workers + D1 + Vectorize + Agents SDK
+
+        === Active Engineering Rules ===
+        {rules.map(r => `- ${r.name}: ${r.description}`).join('\n')}
+
+        === Completed Sprint Tasks ===
+        {ledger.completedTasks.map(t => `- ${t.title}`).join('\n')}
+
+        === Template Injections Applied ===
+        {injections.map(i => `- ${i.patternId} → ${i.planSectionRef}`).join('\n')}
+
+        === Previous AGENTS.md (if exists) ===
+        {previousAgentsMd ?? 'None — first sprint'}
+
+        Generate a structured AGENTS.md with sections:
+        1. Project Overview
+        2. Infrastructure & Bindings
+        3. Agent Class Conventions
+        4. Database Schema Map
+        5. Active Engineering Rules
+        6. Completed Sprint Context
+        7. Anti-Regression Checklist
+```
+
+### 15.3 .agent/rules/ Directory Structure
+
+The agent generates one `.md` file per rule category, committed to the repository under `.agent/rules/`:
+
+```
+.agent/rules/
+├── 00-platform.md        ← Cloudflare-specific binding and runtime rules
+├── 01-database.md        ← Schema organization, Drizzle, D1 conventions
+├── 02-ai-inference.md    ← ModelProvider usage, provider selection rules
+├── 03-agent-classes.md   ← Base class inheritance, getAgentByName() mandate
+├── 04-api-boundaries.md  ← Admin CRUD vs journey routes, no-direct-D1-write
+├── 05-pattern-injection.md ← Template annotation process, tailoring protocol
+└── 99-project-specific.md ← Rules unique to this project (auto-appended)
+```
+
+Each file is structured as:
+
+```markdown
+# Rule Category: Platform Bindings
+
+## Rules
+
+### RULE-CF-01: Use native bindings over external HTTP
+> **Enforcement:** blocking  
+> **Source:** approved_global
+
+Never call external Cloudflare product APIs via fetch(). Use the binding declared
+in wrangler.jsonc instead. This applies to AI, D1, Vectorize, Queues, R2, and KV.
+
+**Correct:**
+```typescript
+const result = await env.AI.run('@cf/model', { ... });
+```
+
+**Wrong:**
+```typescript
+const result = await fetch('https://api.cloudflare.com/ai/...');
+```
+```
+
+### 15.4 Anti-Vacuum Continuity Protocol
+
+Before any new planning or implementation sprint begins, the orchestrator must:
+
+```
+OrchestratorAgent.onStart() — Phase 3 extended version:
+        │
+        ├─ [Phase 2] Load approved_global rules from StandardsAgent
+        │
+        └─ [NEW Phase 3] Load plan ledger from D1:
+               1. SELECT * FROM sprint_contexts WHERE project_id = ?
+                  ORDER BY created_at DESC LIMIT 10
+               2. SELECT * FROM template_annotations WHERE ...
+                  (injections applied in last 3 sprints)
+               3. Read latest AGENTS.md from R2 (if exists)
+               4. Inject into system prompt:
+                    "EXISTING SPRINT CONTEXT:\n{ledger}\n\n
+                     PREVIOUSLY APPLIED TEMPLATES:\n{injections}\n\n
+                     DO NOT re-derive or overwrite these unless explicitly asked."
+               5. Store cross-reference context in hot SQLite for session duration
+```
+
+This guarantees no new sprint runs "blind" — every agent session inherits the full project history.
+
+---
+
+## 16. wrangler.jsonc Additions (Phase 3)
+
+Add the following to the Phase 2 `wrangler.jsonc`:
+
+```jsonc
+{
+  // Add to existing durable_objects.bindings array:
+  "durable_objects": {
+    "bindings": [
+      // ... (existing Phase 2 bindings)
+      { "name": "PATTERN_INGESTION_MCP",    "class_name": "PatternIngestionMcp" },
+      { "name": "LIFECYCLE_ARTIFACT_AGENT", "class_name": "LifecycleArtifactAgent" }
+    ]
+  },
+
+  // Add to existing migrations array:
+  "migrations": [
+    // ... (existing v1, v2)
+    {
+      "tag": "v3",
+      "new_sqlite_classes": [
+        "PatternIngestionMcp",
+        "LifecycleArtifactAgent"
+      ]
+    }
+  ],
+
+  // Add R2 bucket for artifact storage:
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "plannotator-artifacts"
+    }
+  ],
+
+  // Add secrets (set via wrangler secret put):
+  // STANDARDIZATION_REPO_TOKEN  — GitHub PAT for core-github-standardization
+  // OPENAI_API_KEY
+  // ANTHROPIC_API_KEY
+  // GEMINI_API_KEY
+  // CF_ACCOUNT_ID
+  // AI_GATEWAY_ID
+  // ADMIN_BEARER_TOKEN
+}
+```
+
+---
+
+## 17. File-System Layout (Phase 3 additions)
+
+The following additions extend the Phase 2 layout (§10). Existing Phase 2 paths are unchanged.
+
+```
+plannotator/
+├── apps/
+│   └── worker/
+│       └── src/
+│           └── backend/                           ← NEW root for all Phase 3 modules
+│               ├── ai/
+│               │   ├── providers/
+│               │   │   └── model-provider.ts      ← NEW: unified LLM control plane
+│               │   └── agents/
+│               │       ├── BackgroundOperationAgent.ts  ← NEW: base for async agents
+│               │       └── FrontendInteractiveAgent.ts  ← NEW: base for WS agents
+│               ├── agents/
+│               │   ├── PatternIngestionMcp.ts     ← NEW: core-github-standardization MCP
+│               │   └── LifecycleArtifactAgent.ts  ← NEW: AGENTS.md + .agent/rules/ emitter
+│               ├── db/
+│               │   └── schemas/                   ← RELOCATED + REORGANIZED from src/db/schema/
+│               │       ├── index.ts
+│               │       ├── configurations/
+│               │       │   ├── projects.ts
+│               │       │   └── rules.ts
+│               │       ├── plans/
+│               │       │   ├── plans.ts
+│               │       │   ├── plan_versions.ts
+│               │       │   └── template_annotations.ts  ← NEW
+│               │       ├── annotations/
+│               │       │   └── annotations.ts
+│               │       ├── backlog/
+│               │       │   ├── epics.ts
+│               │       │   ├── sprints.ts
+│               │       │   ├── tasks.ts
+│               │       │   └── task_assignments.ts
+│               │       ├── review/
+│               │       │   ├── review_sessions.ts
+│               │       │   └── specialist_reports.ts
+│               │       ├── signals/
+│               │       │   └── learned_preferences.ts
+│               │       └── lifecycle/
+│               │           ├── sprint_contexts.ts        ← NEW
+│               │           └── agent_rule_snapshots.ts   ← NEW
+│               └── routes/
+│                   └── admin.ts                   ← NEW: drizzle-zod auto-CRUD surface
+│
+├── packages/
+│   └── shared/
+│       └── src/
+│           └── patterns.ts                        ← NEW: TemplateAnnotation, TailoringGroup types
+│
+└── .agent/
+    └── rules/                                     ← NEW: generated IDE orchestration rules
+        ├── 00-platform.md
+        ├── 01-database.md
+        ├── 02-ai-inference.md
+        ├── 03-agent-classes.md
+        ├── 04-api-boundaries.md
+        ├── 05-pattern-injection.md
+        └── 99-project-specific.md
+```
+
+---
+
+*End of Implementation Plan — Phases 2 & 3*

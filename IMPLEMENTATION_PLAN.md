@@ -1266,11 +1266,12 @@ export class ModelProvider {
     const gatewayUrl = `https://gateway.ai.cloudflare.com/v1/${this.env.CF_ACCOUNT_ID}/${this.env.AI_GATEWAY_ID}`;
 
     if (provider === 'workers-ai') {
-      const result = await this.env.AI.run(
-        (opts.model ?? '@cf/meta/llama-3.1-8b-instruct') as any,
-        { messages: this.buildMessages(opts) }
-      );
-      return (result as any).response ?? '';
+      // Workers AI model names are typed as string in the SDK;
+      // cast through unknown to satisfy strict model-name literal unions where needed.
+      type WorkersAITextModel = Parameters<typeof this.env.AI.run>[0];
+      const model = (opts.model ?? '@cf/meta/llama-3.1-8b-instruct') as WorkersAITextModel;
+      const result = await this.env.AI.run(model, { messages: this.buildMessages(opts) });
+      return (result as { response?: string }).response ?? '';
     }
 
     // External providers via AI Gateway proxy

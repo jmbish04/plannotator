@@ -14,7 +14,7 @@ You are implementing **Phases 2 and 3** of the Plannotator project — a self-ho
 
 ## Repository
 
-- **Repo root:** `/home/runner/work/plannotator/plannotator` (or wherever it is cloned)
+- **Repo root:** wherever the repo is cloned locally (e.g. `/path/to/plannotator`)
 - **Runtime:** Bun (for local dev), Cloudflare Workers (for deployment)
 - **Package manager:** Bun workspaces
 - **Build:** `bun run build` at repo root

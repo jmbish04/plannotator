@@ -1,0 +1,762 @@
+{
+  "version": "3.0.0",
+  "phase": "Phases 2 & 3 — Self-Hosted Agentic Plannotator",
+  "generatedAt": "2026-05-17",
+  "referenceDoc": "IMPLEMENTATION_PLAN.md",
+  "tasks": [
+    {
+      "id": "P2-001",
+      "pillar": 1,
+      "group": "Infrastructure Setup",
+      "title": "Scaffold apps/worker Cloudflare Worker entry point",
+      "description": "Create the new apps/worker package directory with package.json, wrangler.jsonc, and src/index.ts. Wire the Hono router, export the Worker fetch handler, and export all DO class names. No agent logic yet — just the skeleton that type-checks.",
+      "files": [
+        "apps/worker/package.json",
+        "apps/worker/wrangler.jsonc",
+        "apps/worker/src/index.ts",
+        "apps/worker/src/router.ts"
+      ],
+      "acceptance": [
+        "wrangler dev starts without errors",
+        "GET / returns 200 from static assets binding",
+        "All DO class names are exported from src/index.ts"
+      ],
+      "dependencies": [],
+      "priority": "critical"
+    },
+    {
+      "id": "P2-002",
+      "pillar": 1,
+      "group": "Infrastructure Setup",
+      "title": "Add Phase 2 Drizzle schema files and run D1 migration",
+      "description": "Create all new schema files under src/db/schema/ (learned_preferences, epics, sprints, tasks, task_assignments, review_sessions, specialist_reports). Extend rules table with approval_status, approved_by, approved_at, scope columns. Generate and apply the D1 migration via drizzle-kit.",
+      "files": [
+        "src/db/schema/rules/learned_preferences.ts",
+        "src/db/schema/backlog/epics.ts",
+        "src/db/schema/backlog/sprints.ts",
+        "src/db/schema/backlog/tasks.ts",
+        "src/db/schema/backlog/task_assignments.ts",
+        "src/db/schema/review/review_sessions.ts",
+        "src/db/schema/review/specialist_reports.ts",
+        "src/db/schema/index.ts",
+        "drizzle/migrations/"
+      ],
+      "acceptance": [
+        "drizzle-kit generate produces migration SQL",
+        "wrangler d1 migrations apply succeeds against local D1",
+        "All foreign key references resolve without errors",
+        "TypeScript: tsc --noEmit passes"
+      ],
+      "dependencies": ["P2-001"],
+      "priority": "critical"
+    },
+    {
+      "id": "P2-003",
+      "pillar": 1,
+      "group": "Infrastructure Setup",
+      "title": "Add shared types packages/shared/src/rules.ts and review.ts",
+      "description": "Implement the typed contracts for the rules API (PendingRule, SupportingEvidence, RuleApprovalAction, RulesListResponse) and for the review system (UXReviewResult, PlatformReviewResult, OrchestratorVerdict). Export from packages/shared index.",
+      "files": [
+        "packages/shared/src/rules.ts",
+        "packages/shared/src/review.ts",
+        "packages/shared/src/index.ts"
+      ],
+      "acceptance": [
+        "tsc --noEmit passes across all packages",
+        "No circular imports"
+      ],
+      "dependencies": ["P2-002"],
+      "priority": "critical"
+    },
+    {
+      "id": "P2-004",
+      "pillar": 1,
+      "group": "Standards Engine",
+      "title": "Implement StandardsAgent (Agents SDK)",
+      "description": "Create apps/worker/src/agents/StandardsAgent.ts extending Agent. Implement: onStart() which loads all approved_global rules from D1 and caches them in hot SQLite; processLearningSignal(payload) which embeds rawText using env.AI.run('@cf/baai/bge-base-en-v1.5'), queries Vectorize for similarity, inserts into learned_preferences, and conditionally triggers LLM rule-extraction when cluster threshold (≥3 similar, score ≥0.88) is met; @callable getPendingRules() returning PendingRule[]; @callable promoteRule(id, action) implementing the approval FSM; getApprovedRulesPromptSnippet() returning a formatted string for system-prompt injection.",
+      "files": [
+        "apps/worker/src/agents/StandardsAgent.ts"
+      ],
+      "acceptance": [
+        "processLearningSignal() inserts into D1 and Vectorize",
+        "Cluster detection correctly identifies threshold",
+        "getPendingRules() returns only pending_confirmation rows",
+        "promoteRule() transitions FSM correctly for all 4 actions",
+        "approved_global rules never returned by getPendingRules()"
+      ],
+      "dependencies": ["P2-003"],
+      "priority": "high"
+    },
+    {
+      "id": "P2-005",
+      "pillar": 1,
+      "group": "Standards Engine",
+      "title": "Connect POST /api/approve and /api/deny to standards-learning-queue",
+      "description": "In the existing plan approval route (or the new apps/worker/src/routes/review.ts), after the standard approval/denial logic, iterate over all annotations with non-empty text and enqueue each to the STANDARDS_QUEUE binding. Wire the Queue consumer in src/index.ts to call StandardsAgent.processLearningSignal().",
+      "files": [
+        "apps/worker/src/routes/review.ts",
+        "apps/worker/src/index.ts"
+      ],
+      "acceptance": [
+        "Approving a plan with text annotations produces Queue messages",
+        "Queue consumer routes messages to StandardsAgent",
+        "No duplicate messages for the same annotationId"
+      ],
+      "dependencies": ["P2-004"],
+      "priority": "high"
+    },
+    {
+      "id": "P2-006",
+      "pillar": 1,
+      "group": "Standards Engine",
+      "title": "Implement GET /api/rules and PATCH /api/rules/:id Hono routes",
+      "description": "In apps/worker/src/routes/rules.ts, implement GET /api/rules returning RulesListResponse (hardcoded, approved, pending) and PATCH /api/rules/:id accepting RuleApprovalAction. PATCH must proxy through StandardsAgent.promoteRule() via DO RPC, not write D1 directly.",
+      "files": [
+        "apps/worker/src/routes/rules.ts"
+      ],
+      "acceptance": [
+        "GET /api/rules returns all three status groups",
+        "PATCH with approve_global transitions rule to approved_global",
+        "PATCH with reject sets approvalStatus to rejected",
+        "Rejected rule does not reappear in pending list",
+        "Project-scoped approval sets scope=project and stores projectId"
+      ],
+      "dependencies": ["P2-004"],
+      "priority": "high"
+    },
+    {
+      "id": "P2-007",
+      "pillar": 1,
+      "group": "Standards Engine — Frontend",
+      "title": "Create Rules Config Astro page and RulesConfigPanel React island",
+      "description": "Add apps/marketing/src/pages/rules.astro which server-fetches initial rules data and hydrates the RulesConfigPanel island. Implement apps/marketing/src/components/RulesConfigPanel.tsx with three sections: (1) Global Hardcoded Standards (read-only), (2) Pending Confirmation cards with approve/reject actions, (3) Active Learned/Custom rules with toggle and inline edit. Use useAgent() from 'agents/react' to receive real-time pending-count updates from StandardsAgent.",
+      "files": [
+        "apps/marketing/src/pages/rules.astro",
+        "apps/marketing/src/components/RulesConfigPanel.tsx"
+      ],
+      "acceptance": [
+        "Page renders without JS errors",
+        "Pending card approve action calls PATCH /api/rules/:id",
+        "Rejection removes card from pending section immediately",
+        "Toggle switch for approved rules calls PATCH /api/rules/:id",
+        "useAgent state update increments pending count badge in real-time"
+      ],
+      "dependencies": ["P2-006"],
+      "priority": "medium"
+    },
+    {
+      "id": "P2-008",
+      "pillar": 2,
+      "group": "Multi-Agent Mesh",
+      "title": "Implement CloudflareDocsMcp McpAgent",
+      "description": "Create apps/worker/src/agents/CloudflareDocsMcp.ts extending McpAgent. Register a single tool 'search_cloudflare_documentation' that proxies to the Cloudflare Docs MCP server. This is the shared MCP endpoint that all specialist sub-agents connect to via DO binding.",
+      "files": [
+        "apps/worker/src/agents/CloudflareDocsMcp.ts"
+      ],
+      "acceptance": [
+        "McpAgent initializes without errors",
+        "search_cloudflare_documentation tool is registered",
+        "Tool returns non-empty results for a test query",
+        "Agent survives hibernation and reconnects"
+      ],
+      "dependencies": ["P2-001"],
+      "priority": "high"
+    },
+    {
+      "id": "P2-009",
+      "pillar": 2,
+      "group": "Multi-Agent Mesh",
+      "title": "Implement UXSpecialistAgent",
+      "description": "Create apps/worker/src/agents/UXSpecialistAgent.ts extending Agent. Implement: onStart() which calls this.addMcpServer('cf-docs', this.env.CF_DOCS_MCP) via DO binding; analyze(plan, streamCollector) which runs the Astro SSR / client:load / Shadcn review pass using env.AI.run with injected system prompt, executes cf-docs MCP lookups as needed, and streams progress via streamCollector.onChunk(); returns UXReviewResult.",
+      "files": [
+        "apps/worker/src/agents/UXSpecialistAgent.ts"
+      ],
+      "acceptance": [
+        "onStart() registers cf-docs MCP tool without errors",
+        "analyze() returns a valid UXReviewResult with score 0-100",
+        "astroViolations array is populated when plan contains anti-patterns",
+        "streamCollector receives at least one chunk during analysis",
+        "addMcpServer uses DO binding, not an HTTP URL"
+      ],
+      "dependencies": ["P2-008"],
+      "priority": "high"
+    },
+    {
+      "id": "P2-010",
+      "pillar": 2,
+      "group": "Multi-Agent Mesh",
+      "title": "Implement PlatformSpecialistAgent",
+      "description": "Create apps/worker/src/agents/PlatformSpecialistAgent.ts extending Agent. Same structure as UXSpecialistAgent but focused on: native binding usage vs. external REST APIs, wrangler.jsonc migrations presence, AI Gateway fallback config, D1/R2/KV/Queue correct usage patterns. Returns PlatformReviewResult.",
+      "files": [
+        "apps/worker/src/agents/PlatformSpecialistAgent.ts"
+      ],
+      "acceptance": [
+        "analyze() returns a valid PlatformReviewResult",
+        "bindingViolations populated when plan references fetch() against external APIs instead of bindings",
+        "aiGatewayConfigured correctly detected from plan content",
+        "MCP tool lookups fire during analysis"
+      ],
+      "dependencies": ["P2-008"],
+      "priority": "high"
+    },
+    {
+      "id": "P2-011",
+      "pillar": 2,
+      "group": "Multi-Agent Mesh",
+      "title": "Implement OrchestratorAgent",
+      "description": "Create apps/worker/src/agents/OrchestratorAgent.ts extending Agent. Implement: onStart() which loads approved rules from StandardsAgent via @callable getRulesSnippet() and sets the system-prompt state; conductReview(planVersionId) which reads plan content, instantiates both sub-agents via this.subAgent(), runs them in parallel via Promise.all(), collects streamed results, runs an LLM synthesis pass, persists the OrchestratorVerdict to review_sessions and specialist_reports in D1, and broadcasts progress over WebSocket. Expose @callable startReview(planVersionId) for external invocation.",
+      "files": [
+        "apps/worker/src/agents/OrchestratorAgent.ts"
+      ],
+      "acceptance": [
+        "conductReview() instantiates UXSpecialistAgent and PlatformSpecialistAgent via this.subAgent()",
+        "Both sub-agents run in parallel (Promise.all)",
+        "Synthesis narrative is non-empty",
+        "OrchestratorVerdict is persisted to D1",
+        "WebSocket clients connected to OrchestratorAgent receive progress frames",
+        "Sub-agent names are scoped to session: 'ux-{sessionId}', 'pl-{sessionId}'"
+      ],
+      "dependencies": ["P2-009", "P2-010", "P2-004"],
+      "priority": "high"
+    },
+    {
+      "id": "P2-012",
+      "pillar": 2,
+      "group": "Multi-Agent Mesh",
+      "title": "Implement POST /api/review/start and GET /api/review/:sessionId Hono routes",
+      "description": "In apps/worker/src/routes/review.ts, add POST /api/review/start (body: { planVersionId, projectId }) which gets or creates an OrchestratorAgent instance by sessionId, calls startReview(), and returns { sessionId }. Add GET /api/review/:sessionId which returns the current review session status and verdict from D1.",
+      "files": [
+        "apps/worker/src/routes/review.ts"
+      ],
+      "acceptance": [
+        "POST /api/review/start returns sessionId immediately (non-blocking)",
+        "Review runs asynchronously in the DO",
+        "GET /api/review/:sessionId returns current status",
+        "Once complete, verdict and specialist reports are retrievable"
+      ],
+      "dependencies": ["P2-011"],
+      "priority": "medium"
+    },
+    {
+      "id": "P2-013",
+      "pillar": 3,
+      "group": "Backlog Service",
+      "title": "Implement BacklogAgent",
+      "description": "Create apps/worker/src/agents/BacklogAgent.ts extending Agent. Hot SQLite tables: hot_tasks (mirrors tasks D1 columns), hot_task_events (audit log). Implement: onConnect() with snapshot send and presence broadcast; onMessage() with task mutation hot path (Zod validation → SQLite write → this.broadcast() → waitUntil(mirrorToD1())); mirrorToD1() updating tasks and inserting task_assignments in D1; @callable initializeFromPlan(epicIds, taskIds) which bulk-inserts into hot_tasks and broadcasts backlog_initialized; @callable updateTaskStatus(taskId, newStatus, note, agentId); @callable claimTask(taskId, agentId); @callable releaseTask(taskId, agentId); scheduled reconcileWithD1() method for hourly alarm.",
+      "files": [
+        "apps/worker/src/agents/BacklogAgent.ts"
+      ],
+      "acceptance": [
+        "onConnect() sends snapshot with current hot_tasks",
+        "task_update message updates hot SQLite synchronously",
+        "this.broadcast() fires before waitUntil(mirrorToD1())",
+        "D1 tasks table is updated after mirrorToD1 completes",
+        "task_assignments row is inserted on every status change",
+        "Agent survives hibernation; connection.state is restored",
+        "Second client connecting sees current state in snapshot"
+      ],
+      "dependencies": ["P2-002"],
+      "priority": "high"
+    },
+    {
+      "id": "P2-014",
+      "pillar": 3,
+      "group": "Backlog Service",
+      "title": "Implement backlog decomposition pipeline",
+      "description": "Create apps/worker/src/lib/backlogDecomposer.ts. Function decomposeIntoBacklog(planVersionId, projectId, env) reads plan content from D1, calls env.AI.run() with a structured-output prompt requesting { epics, tasks } JSON, validates against Zod schema, batch-inserts into D1 backlog tables, then calls BacklogAgent.initializeFromPlan() via DO RPC. Wire this into the POST /api/approve route via ctx.waitUntil().",
+      "files": [
+        "apps/worker/src/lib/backlogDecomposer.ts",
+        "apps/worker/src/routes/review.ts"
+      ],
+      "acceptance": [
+        "decomposeIntoBacklog() produces at least one Epic and one Task for any non-trivial plan",
+        "Zod validation rejects malformed LLM output and retries once",
+        "D1 epics and tasks tables are populated after approval",
+        "BacklogAgent hot_tasks is populated via initializeFromPlan()",
+        "WS clients receive backlog_initialized broadcast",
+        "Function is called via ctx.waitUntil so approval response is not blocked"
+      ],
+      "dependencies": ["P2-013"],
+      "priority": "high"
+    },
+    {
+      "id": "P2-015",
+      "pillar": 3,
+      "group": "Backlog Service",
+      "title": "Implement Hono routes for external coding agent REST API",
+      "description": "In apps/worker/src/routes/tasks.ts, implement: GET /api/tasks/:projectId (with ?status and ?epicId filters), POST /api/tasks/:projectId/:taskId/claim (body: { agentId }), PATCH /api/tasks/:projectId/:taskId/status (body: { newStatus, note, agentId }), POST /api/tasks/:projectId/:taskId/release (body: { agentId, reason? }). All mutation routes must proxy through BacklogAgent @callable methods via DO RPC (no direct D1 writes). Bearer token authentication via apps/worker/src/lib/auth.ts.",
+      "files": [
+        "apps/worker/src/routes/tasks.ts",
+        "apps/worker/src/lib/auth.ts"
+      ],
+      "acceptance": [
+        "GET without auth token returns 401",
+        "GET with valid token returns tasks array",
+        "Claim sets claimedBy on the task and records task_assignment row",
+        "Second claim attempt on already-claimed task returns 409",
+        "Status PATCH triggers BacklogAgent hot path (SQLite → broadcast → D1)",
+        "Connected WS clients see task_updated broadcast after REST PATCH"
+      ],
+      "dependencies": ["P2-013"],
+      "priority": "high"
+    },
+    {
+      "id": "P2-016",
+      "pillar": 3,
+      "group": "Backlog Service",
+      "title": "Wire BacklogAgent WebSocket route in Hono router",
+      "description": "In apps/worker/src/router.ts, add GET /api/backlog/:projectId/ws which handles the WebSocket upgrade and routes to the BacklogAgent DO instance keyed by projectId. Validate the ?token query param before upgrading.",
+      "files": [
+        "apps/worker/src/router.ts"
+      ],
+      "acceptance": [
+        "WebSocket upgrade succeeds for valid token",
+        "WebSocket upgrade returns 401 for invalid/missing token",
+        "Client receives snapshot frame immediately after connection",
+        "Disconnection triggers presence_left broadcast"
+      ],
+      "dependencies": ["P2-013"],
+      "priority": "high"
+    },
+    {
+      "id": "P2-017",
+      "pillar": 2,
+      "group": "Integration",
+      "title": "Integrate OrchestratorAgent review trigger into plan approval flow",
+      "description": "After a plan is approved (POST /api/approve), create or get the OrchestratorAgent for the session and call startReview(planVersionId) via DO RPC using ctx.waitUntil. The review runs asynchronously; the approval response must not wait for it.",
+      "files": [
+        "apps/worker/src/routes/review.ts"
+      ],
+      "acceptance": [
+        "Approval response returns immediately",
+        "OrchestratorAgent is instantiated after approval",
+        "review_sessions row is created with status='pending'",
+        "Row transitions to 'completed' once sub-agents finish"
+      ],
+      "dependencies": ["P2-011", "P2-014"],
+      "priority": "medium"
+    },
+    {
+      "id": "P2-018",
+      "pillar": 1,
+      "group": "Infrastructure Setup",
+      "title": "Add apps/worker to monorepo workspace and CI pipeline",
+      "description": "Update the root package.json workspaces array to include apps/worker. Add build and dev scripts (dev:worker, build:worker) to the root package.json. Update .github/workflows (if present) to include the new worker app in CI. Ensure bun install resolves all deps.",
+      "files": [
+        "package.json",
+        ".github/workflows/"
+      ],
+      "acceptance": [
+        "bun install resolves from repo root",
+        "bun run dev:worker starts wrangler dev",
+        "bun run build:worker produces a deployable bundle",
+        "CI passes"
+      ],
+      "dependencies": ["P2-001"],
+      "priority": "medium"
+    },
+    {
+      "id": "P2-019",
+      "pillar": 1,
+      "group": "Documentation",
+      "title": "Update CLAUDE.md and AGENTS.md with Phase 2 architecture",
+      "description": "Add a Phase 2 section to CLAUDE.md describing: new apps/worker app, new Cloudflare primitives (Agents SDK, Vectorize, D1), how to run wrangler dev locally, new environment variables (D1 ID, Vectorize index, Queue names). Update AGENTS.md with the new agent classes and their responsibilities.",
+      "files": [
+        "CLAUDE.md",
+        "AGENTS.md"
+      ],
+      "acceptance": [
+        "CLAUDE.md mentions apps/worker and wrangler.jsonc",
+        "AGENTS.md lists all 6 agent classes with descriptions"
+      ],
+      "dependencies": ["P2-018"],
+      "priority": "low"
+    }
+  ],
+  "executionOrder": [
+    "P2-001",
+    "P2-002",
+    "P2-003",
+    "P2-008",
+    "P2-004",
+    "P2-009",
+    "P2-010",
+    "P2-013",
+    "P2-005",
+    "P2-006",
+    "P2-011",
+    "P2-014",
+    "P2-015",
+    "P2-016",
+    "P2-012",
+    "P2-017",
+    "P2-007",
+    "P2-018",
+    "P2-019",
+    "P3-001",
+    "P3-002",
+    "P3-003",
+    "P3-004",
+    "P3-005",
+    "P3-006",
+    "P3-007",
+    "P3-008",
+    "P3-009",
+    "P3-010",
+    "P3-011",
+    "P3-012",
+    "P3-013",
+    "P3-014",
+    "P3-015"
+  ],
+  "critical_path": [
+    "P2-001",
+    "P2-002",
+    "P2-003",
+    "P2-008",
+    "P2-009",
+    "P2-010",
+    "P2-004",
+    "P2-011",
+    "P2-013",
+    "P2-014",
+    "P2-015",
+    "P3-001",
+    "P3-002",
+    "P3-004",
+    "P3-005",
+    "P3-007",
+    "P3-008",
+    "P3-009",
+    "P3-011",
+    "P3-013"
+  ],
+  "phase3_tasks": [
+    {
+      "id": "P3-001",
+      "pillar": 4,
+      "group": "Pattern Ingestion",
+      "title": "Implement PatternIngestionMcp McpAgent",
+      "description": "Create apps/worker/src/backend/agents/PatternIngestionMcp.ts extending McpAgent. Register three tools: list_patterns (fetches manifest.json from core-github-standardization via GitHub API using STANDARDIZATION_REPO_TOKEN secret), get_pattern_files (fetches raw file contents for a patternId), and build_inject_command (templates the injectCommand string with project-specific parameters). PatternManifest and PatternEntry types live in packages/shared/src/patterns.ts.",
+      "files": [
+        "apps/worker/src/backend/agents/PatternIngestionMcp.ts",
+        "packages/shared/src/patterns.ts"
+      ],
+      "acceptance": [
+        "list_patterns returns at least one pattern entry",
+        "get_pattern_files returns file content map for a valid patternId",
+        "build_inject_command interpolates all parameterSchema keys",
+        "STANDARDIZATION_REPO_TOKEN is read from env, never hardcoded",
+        "Agent is exported from apps/worker/src/index.ts",
+        "McpAgent initializes without errors in wrangler dev"
+      ],
+      "dependencies": ["P2-001", "P2-003"],
+      "priority": "high"
+    },
+    {
+      "id": "P3-002",
+      "pillar": 4,
+      "group": "Pattern Ingestion",
+      "title": "Add template mapping pass to OrchestratorAgent",
+      "description": "Extend OrchestratorAgent.conductReview() with a template mapping pass that runs after the standard specialist analysis. The pass: (1) calls list_patterns via PatternIngestionMcp MCP, (2) makes a ModelProvider.generateStructured() call producing TemplateAnnotation[], (3) calls build_inject_command for each matched annotation, (4) inserts rows into template_annotations D1 table, (5) broadcasts template_annotations event over WebSocket. Add PatternIngestionMcp DO binding to wrangler.jsonc and this.addMcpServer('pattern-ingestion', env.PATTERN_INGESTION_MCP) in onStart().",
+      "files": [
+        "apps/worker/src/agents/OrchestratorAgent.ts",
+        "apps/worker/wrangler.jsonc"
+      ],
+      "acceptance": [
+        "conductReview() calls list_patterns via MCP after specialist passes",
+        "TemplateAnnotation[] is Zod-validated",
+        "template_annotations rows inserted in D1",
+        "broadcast fires with type:'template_annotations'",
+        "Zero-match result (empty array) is handled gracefully — review proceeds"
+      ],
+      "dependencies": ["P3-001", "P2-011"],
+      "priority": "high"
+    },
+    {
+      "id": "P3-003",
+      "pillar": 4,
+      "group": "Pattern Ingestion",
+      "title": "Implement specialist tailoring pass in UXSpecialistAgent and PlatformSpecialistAgent",
+      "description": "Extend UXSpecialistAgent.analyze() and PlatformSpecialistAgent.analyze() to accept an optional templateAnnotations parameter. When provided, for each annotation in the agent's domain, fetch pattern files via MCP and run a ModelProvider.generateStructured() call producing TailoringGroup. Attach the TailoringGroup to the annotation. Return augmented results including tailoringGroups. Update UXReviewResult and PlatformReviewResult in packages/shared/src/review.ts to include an optional tailoringGroups field.",
+      "files": [
+        "apps/worker/src/agents/UXSpecialistAgent.ts",
+        "apps/worker/src/agents/PlatformSpecialistAgent.ts",
+        "packages/shared/src/review.ts",
+        "packages/shared/src/patterns.ts"
+      ],
+      "acceptance": [
+        "analyze() with templateAnnotations produces TailoringGroup[] in result",
+        "TailoringGroup.instructions array is non-empty for any matched annotation",
+        "TailoringGroup is Zod-validated before being attached",
+        "analyze() without templateAnnotations behaves exactly as before (backward compatible)",
+        "TailoringGroup is stored in template_annotations.tailoring_group (JSON) via OrchestratorAgent update"
+      ],
+      "dependencies": ["P3-002"],
+      "priority": "high"
+    },
+    {
+      "id": "P3-004",
+      "pillar": 5,
+      "group": "Schema Modularization",
+      "title": "Relocate and reorganize all Drizzle schema files to canonical domain structure",
+      "description": "Move all Phase 2 schema files from src/db/schema/ to apps/worker/src/backend/db/schemas/ following the domain directory layout in §13.1. Create all new directories: configurations/, plans/, annotations/, backlog/, review/, signals/, lifecycle/. Each table gets its own file. Rename existing files to match the canonical table name. Update all imports in agent files. Create new index.ts that re-exports all tables. Create new Phase 3 tables: template_annotations.ts (plans/), sprint_contexts.ts (lifecycle/), agent_rule_snapshots.ts (lifecycle/).",
+      "files": [
+        "apps/worker/src/backend/db/schemas/index.ts",
+        "apps/worker/src/backend/db/schemas/configurations/projects.ts",
+        "apps/worker/src/backend/db/schemas/configurations/rules.ts",
+        "apps/worker/src/backend/db/schemas/plans/plans.ts",
+        "apps/worker/src/backend/db/schemas/plans/plan_versions.ts",
+        "apps/worker/src/backend/db/schemas/plans/template_annotations.ts",
+        "apps/worker/src/backend/db/schemas/annotations/annotations.ts",
+        "apps/worker/src/backend/db/schemas/backlog/epics.ts",
+        "apps/worker/src/backend/db/schemas/backlog/sprints.ts",
+        "apps/worker/src/backend/db/schemas/backlog/tasks.ts",
+        "apps/worker/src/backend/db/schemas/backlog/task_assignments.ts",
+        "apps/worker/src/backend/db/schemas/review/review_sessions.ts",
+        "apps/worker/src/backend/db/schemas/review/specialist_reports.ts",
+        "apps/worker/src/backend/db/schemas/signals/learned_preferences.ts",
+        "apps/worker/src/backend/db/schemas/lifecycle/sprint_contexts.ts",
+        "apps/worker/src/backend/db/schemas/lifecycle/agent_rule_snapshots.ts"
+      ],
+      "acceptance": [
+        "tsc --noEmit passes with zero errors",
+        "No file imports from schemas/index.ts (only index.ts re-exports)",
+        "drizzle-kit generate produces migration SQL including new Phase 3 tables",
+        "wrangler d1 migrations apply succeeds for all migrations",
+        "No circular imports between schema files"
+      ],
+      "dependencies": ["P2-002"],
+      "priority": "critical"
+    },
+    {
+      "id": "P3-005",
+      "pillar": 5,
+      "group": "Schema Modularization",
+      "title": "Implement drizzle-zod auto-admin CRUD surface",
+      "description": "Create apps/worker/src/backend/routes/admin.ts. Import all tables from schemas/index.ts. Use a for...of loop over Object.entries(schema) to dynamically register 5 routes per table (GET list, GET by id, POST create, PATCH update, DELETE) using createInsertSchema and createSelectSchema from drizzle-zod. Mount the admin router at /api/admin in apps/worker/src/router.ts behind requireAdminBearer middleware. Add ADMIN_BEARER_TOKEN secret to wrangler.jsonc vars.",
+      "files": [
+        "apps/worker/src/backend/routes/admin.ts",
+        "apps/worker/src/router.ts",
+        "apps/worker/wrangler.jsonc"
+      ],
+      "acceptance": [
+        "GET /api/admin/tables/tasks returns rows array",
+        "POST /api/admin/tables/tasks with valid body returns 201",
+        "PATCH /api/admin/tables/tasks/:id with partial body returns updated row",
+        "DELETE /api/admin/tables/tasks/:id returns { deleted: true }",
+        "GET /api/admin/tables/nonexistent_table returns 404",
+        "All routes return 401 without ADMIN_BEARER_TOKEN header",
+        "Adding a new schema file to schemas/ requires zero changes to admin.ts"
+      ],
+      "dependencies": ["P3-004"],
+      "priority": "high"
+    },
+    {
+      "id": "P3-006",
+      "pillar": 5,
+      "group": "Schema Modularization",
+      "title": "Implement journey-driven API route files",
+      "description": "Create four journey route files in apps/worker/src/backend/routes/: plans-submit.ts (POST /api/plans/submit — insert plan, enqueue backlog decomposition), patterns-inject.ts (POST /api/patterns/inject — record injection command execution), sprints-snapshot.ts (POST /api/sprints/snapshot — insert sprint_contexts row with current rules + completed task IDs), lifecycle-compile.ts (POST /api/lifecycle/compile-rules — call LifecycleArtifactAgent.run() via getAgentByName). Each route must have its own Zod request body schema — do not reuse drizzle-zod generated schemas. Mount all four in router.ts.",
+      "files": [
+        "apps/worker/src/backend/routes/plans-submit.ts",
+        "apps/worker/src/backend/routes/patterns-inject.ts",
+        "apps/worker/src/backend/routes/sprints-snapshot.ts",
+        "apps/worker/src/backend/routes/lifecycle-compile.ts",
+        "apps/worker/src/router.ts"
+      ],
+      "acceptance": [
+        "POST /api/plans/submit returns plan + backlog stub, enqueues decomposition",
+        "POST /api/patterns/inject inserts injection record",
+        "POST /api/sprints/snapshot inserts sprint_contexts row with correct JSON fields",
+        "POST /api/lifecycle/compile-rules returns { jobId } immediately",
+        "Each route has its own independent Zod schema (not imported from drizzle-zod)",
+        "Journey routes are not served under /api/admin"
+      ],
+      "dependencies": ["P3-005", "P3-001"],
+      "priority": "medium"
+    },
+    {
+      "id": "P3-007",
+      "pillar": 6,
+      "group": "AI Abstractions",
+      "title": "Implement ModelProvider central inference control plane",
+      "description": "Create apps/worker/src/backend/ai/providers/model-provider.ts implementing the ModelProvider class exactly as specified in §14.1. Implement generateText() with workers-ai default and external provider routing via AI Gateway, generateStructured<T>() with gemini default and Zod schema retry loop (max 2 retries), and generateVision() with workers-ai default. Add required env bindings to Env type: CF_ACCOUNT_ID, AI_GATEWAY_ID, OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY. Add zod-to-json-schema as a dependency.",
+      "files": [
+        "apps/worker/src/backend/ai/providers/model-provider.ts",
+        "apps/worker/src/index.ts",
+        "apps/worker/package.json"
+      ],
+      "acceptance": [
+        "generateText() with no provider calls env.AI.run()",
+        "generateText() with provider:'openai' calls AI Gateway URL",
+        "generateStructured() returns parsed Zod-validated object",
+        "generateStructured() retries on validation failure up to 2 times",
+        "generateVision() calls @cf/llava-1.5-7b-hf by default",
+        "No other file in the codebase calls env.AI.run() directly (except ModelProvider)",
+        "tsc --noEmit passes"
+      ],
+      "dependencies": ["P2-001"],
+      "priority": "critical"
+    },
+    {
+      "id": "P3-008",
+      "pillar": 6,
+      "group": "AI Abstractions",
+      "title": "Implement BackgroundOperationAgent base class",
+      "description": "Create apps/worker/src/backend/ai/agents/BackgroundOperationAgent.ts as specified in §14.2. The class extends Agent<E, S extends BackgroundState>. Implement onStart() which instantiates this.ai = new ModelProvider(this.env) and calls onAgentStart(). Implement setRunning(), setComplete(), setError() state helpers. Declare abstract run(payload: unknown): Promise<void>. Include a prominent JSDoc comment mandating getAgentByName() usage over raw DO primitives.",
+      "files": [
+        "apps/worker/src/backend/ai/agents/BackgroundOperationAgent.ts"
+      ],
+      "acceptance": [
+        "Class compiles without errors",
+        "Subclass that implements run() can be instantiated",
+        "setRunning() updates state.status to 'running'",
+        "setComplete() updates state.status to 'complete' and sets completedAt",
+        "setError() updates state.status to 'error' and sets error message",
+        "this.ai is available in any subclass method"
+      ],
+      "dependencies": ["P3-007"],
+      "priority": "critical"
+    },
+    {
+      "id": "P3-009",
+      "pillar": 6,
+      "group": "AI Abstractions",
+      "title": "Implement FrontendInteractiveAgent base class",
+      "description": "Create apps/worker/src/backend/ai/agents/FrontendInteractiveAgent.ts as specified in §14.3. The class extends AIChatAgent<E, S extends InteractiveState>. Implement onStart() with ModelProvider instantiation and onAgentStart() hook. Override onConnect() to parse userId and sessionId from URL query params, call connection.setState(), and invoke onClientConnect(). Include JSDoc mandating getAgentByName() factory.",
+      "files": [
+        "apps/worker/src/backend/ai/agents/FrontendInteractiveAgent.ts"
+      ],
+      "acceptance": [
+        "Class compiles without errors extending AIChatAgent",
+        "onConnect() correctly parses userId and sessionId from URL",
+        "connection.setState() is called in onConnect()",
+        "Subclass can override onClientConnect() without touching onConnect()",
+        "this.ai (ModelProvider) is available in any subclass method"
+      ],
+      "dependencies": ["P3-007"],
+      "priority": "critical"
+    },
+    {
+      "id": "P3-010",
+      "pillar": 6,
+      "group": "AI Abstractions",
+      "title": "Refactor Phase 2 agents to extend base classes and use ModelProvider",
+      "description": "Update all Phase 2 agent files to: (1) extend BackgroundOperationAgent instead of Agent (for StandardsAgent, OrchestratorAgent, UXSpecialistAgent, PlatformSpecialistAgent), (2) extend FrontendInteractiveAgent instead of Agent (for BacklogAgent), (3) replace all direct env.AI.run() calls with this.ai.generateText() or this.ai.generateStructured(), (4) replace all raw DO instantiation patterns (idFromName + .get()) with getAgentByName() calls. Do not change any external behavior — this is a pure refactor.",
+      "files": [
+        "apps/worker/src/agents/StandardsAgent.ts",
+        "apps/worker/src/agents/OrchestratorAgent.ts",
+        "apps/worker/src/agents/UXSpecialistAgent.ts",
+        "apps/worker/src/agents/PlatformSpecialistAgent.ts",
+        "apps/worker/src/agents/BacklogAgent.ts"
+      ],
+      "acceptance": [
+        "All agents extend the correct base class",
+        "Zero direct env.AI.run() calls remain outside ModelProvider",
+        "Zero idFromName() or raw .get() calls remain in agent files",
+        "All existing Phase 2 acceptance criteria still pass (no regression)",
+        "tsc --noEmit passes"
+      ],
+      "dependencies": ["P3-008", "P3-009"],
+      "priority": "high"
+    },
+    {
+      "id": "P3-011",
+      "pillar": 7,
+      "group": "Lifecycle Artifacts",
+      "title": "Implement LifecycleArtifactAgent",
+      "description": "Create apps/worker/src/backend/agents/LifecycleArtifactAgent.ts extending BackgroundOperationAgent. Implement run(payload: LifecycleCompilePayload): (1) loadPlanLedger() — query last 10 sprint_contexts from D1 for projectId; (2) loadActiveRules() — fetch approved_global rules from D1; (3) loadTemplateAnnotations() — fetch template_annotations for the review session; (4) generateAgentsMd() — call this.ai.generateText() with the structured prompt from §15.2; (5) generateRuleFiles() — call this.ai.generateStructured() per category producing { fileName, content } objects; (6) persistArtifacts() — write AGENTS.md and rule files to R2 (ARTIFACTS binding); (7) storeRuleSnapshots() — batch insert into agent_rule_snapshots D1 table. Add LIFECYCLE_ARTIFACT_AGENT DO binding and ARTIFACTS R2 binding to wrangler.jsonc.",
+      "files": [
+        "apps/worker/src/backend/agents/LifecycleArtifactAgent.ts",
+        "apps/worker/wrangler.jsonc"
+      ],
+      "acceptance": [
+        "run() completes without error given a valid payload",
+        "AGENTS.md content written to R2 under key agents-md/{projectId}/AGENTS.md",
+        "Rule files written to R2 under .agent/rules/{fileName}",
+        "agent_rule_snapshots rows inserted in D1",
+        "run() handles missing previous AGENTS.md gracefully",
+        "Agent state transitions: idle → running → complete (or error)"
+      ],
+      "dependencies": ["P3-008", "P3-004", "P3-007"],
+      "priority": "high"
+    },
+    {
+      "id": "P3-012",
+      "pillar": 7,
+      "group": "Lifecycle Artifacts",
+      "title": "Wire lifecycle compile route and generate initial .agent/rules/ scaffold",
+      "description": "The POST /api/lifecycle/compile-rules route (created in P3-006) must call LifecycleArtifactAgent via getAgentByName(env.LIFECYCLE_ARTIFACT_AGENT, projectId). After the first successful run, manually download the generated rule files from R2 and commit them to .agent/rules/ in the repository. Create a placeholder .agent/rules/.gitkeep so the directory is tracked. Document the R2 → local sync process in CLAUDE.md.",
+      "files": [
+        ".agent/rules/.gitkeep",
+        "CLAUDE.md"
+      ],
+      "acceptance": [
+        "POST /api/lifecycle/compile-rules returns { jobId } immediately",
+        ".agent/rules/.gitkeep is committed",
+        "CLAUDE.md documents how to sync generated rule files from R2",
+        "getAgentByName() is used (not raw DO instantiation)"
+      ],
+      "dependencies": ["P3-011", "P3-006"],
+      "priority": "medium"
+    },
+    {
+      "id": "P3-013",
+      "pillar": 7,
+      "group": "Lifecycle Artifacts",
+      "title": "Implement anti-vacuum continuity in OrchestratorAgent.onStart()",
+      "description": "Extend OrchestratorAgent.onStart() with the plan ledger query described in §15.4: (1) SELECT last 10 sprint_contexts from D1 for the project, (2) SELECT template_annotations from last 3 review sessions, (3) fetch latest AGENTS.md from R2 (if exists), (4) inject all of this into the agent's system prompt state using setState(). Ensure this executes before any conductReview() call. The system prompt injection must be idempotent — calling onStart() twice must not duplicate context.",
+      "files": [
+        "apps/worker/src/agents/OrchestratorAgent.ts"
+      ],
+      "acceptance": [
+        "onStart() queries sprint_contexts with ORDER BY created_at DESC LIMIT 10",
+        "System prompt includes EXISTING SPRINT CONTEXT section when ledger is non-empty",
+        "Empty ledger (first sprint) produces no context section — no errors",
+        "Calling onStart() twice does not duplicate system prompt context",
+        "conductReview() can read injected context from this.state"
+      ],
+      "dependencies": ["P3-011", "P2-011"],
+      "priority": "high"
+    },
+    {
+      "id": "P3-014",
+      "pillar": 4,
+      "group": "Pattern Ingestion",
+      "title": "Add Phase 3 DO and R2 bindings to wrangler.jsonc and update Env type",
+      "description": "Consolidate all Phase 3 additions to wrangler.jsonc: PATTERN_INGESTION_MCP DO binding, LIFECYCLE_ARTIFACT_AGENT DO binding, ARTIFACTS R2 bucket binding, v3 migration tag with new_sqlite_classes. Update apps/worker/src/index.ts Env interface to include all new bindings (PATTERN_INGESTION_MCP: DurableObjectNamespace, LIFECYCLE_ARTIFACT_AGENT: DurableObjectNamespace, ARTIFACTS: R2Bucket, STANDARDIZATION_REPO_TOKEN: string, OPENAI_API_KEY: string, ANTHROPIC_API_KEY: string, GEMINI_API_KEY: string, CF_ACCOUNT_ID: string, AI_GATEWAY_ID: string, ADMIN_BEARER_TOKEN: string).",
+      "files": [
+        "apps/worker/wrangler.jsonc",
+        "apps/worker/src/index.ts"
+      ],
+      "acceptance": [
+        "wrangler dev starts without binding errors",
+        "Env type includes all 10 new fields",
+        "tsc --noEmit passes",
+        "v3 migration tag lists PatternIngestionMcp and LifecycleArtifactAgent"
+      ],
+      "dependencies": ["P3-001", "P3-011"],
+      "priority": "critical"
+    },
+    {
+      "id": "P3-015",
+      "pillar": 7,
+      "group": "Documentation",
+      "title": "Update CLAUDE.md and AGENTS.md with Phase 3 architecture",
+      "description": "Update CLAUDE.md with Phase 3 additions: new apps/worker/src/backend/ module tree, ModelProvider usage mandate, base agent class hierarchy, schema canonical layout, admin CRUD surface, R2 artifact sync process, new wrangler.jsonc secrets. Update AGENTS.md with all Phase 3 agent classes (PatternIngestionMcp, LifecycleArtifactAgent) and the two base classes (BackgroundOperationAgent, FrontendInteractiveAgent). Add a getAgentByName() mandate box.",
+      "files": [
+        "CLAUDE.md",
+        "AGENTS.md"
+      ],
+      "acceptance": [
+        "CLAUDE.md mentions ModelProvider and prohibits direct env.AI.run() usage",
+        "CLAUDE.md documents schema canonical path and admin CRUD surface",
+        "AGENTS.md lists all 8 agent classes with correct base class",
+        "AGENTS.md has a highlighted box: ALWAYS use getAgentByName() — never idFromName()"
+      ],
+      "dependencies": ["P3-014", "P2-019"],
+      "priority": "low"
+    }
+  ]
+}
